@@ -1,0 +1,84 @@
+name: Publish and consume
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REPO_URL: https://maven.pkg.github.com/${{ github.repository }}
+  ARTIFACT: io.github.srinivaskarre:hello-lib:1.0.0
+  METADATA_PATH: io/github/srinivaskarre/hello-lib/maven-metadata.xml
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+      - name: Publish 1.0.0 to GitHub Packages
+        run: mvn -B deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  consume-anonymous:
+    name: Download without credentials (like a customer with no token)
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Plain HTTPS request, no credentials
+        run: |
+          code=$(curl -sS -o /dev/null -w "%{http_code}" "$REPO_URL/$METADATA_PATH")
+          echo "HTTP status without credentials: $code"
+          echo "### Anonymous HTTPS request: HTTP $code" >> "$GITHUB_STEP_SUMMARY"
+      - name: Maven download, no credentials
+        run: |
+          if mvn -B -q org.apache.maven.plugins:maven-dependency-plugin:3.6.1:get \
+               -DremoteRepositories="gh::default::$REPO_URL" -Dartifact="$ARTIFACT" -Dtransitive=false; then
+            echo "### Anonymous Maven download: SUCCEEDED" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Anonymous Maven download: FAILED (credentials required)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  consume-with-token:
+    name: Download with a token
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          server-id: gh
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+      - name: Maven download with this repository's GITHUB_TOKEN
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if mvn -B -q org.apache.maven.plugins:maven-dependency-plugin:3.6.1:get \
+               -DremoteRepositories="gh::default::$REPO_URL" -Dartifact="$ARTIFACT" -Dtransitive=false; then
+            echo "### Maven download with token: SUCCEEDED" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Maven download with token: FAILED" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
